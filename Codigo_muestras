@@ -1,0 +1,140 @@
+import pandas as pd
+from openpyxl import load_workbook
+from openpyxl.utils import get_column_letter
+import numpy as np
+import matplotlib.pyplot as plt
+
+def cargar_datos_excel(ruta_archivo):
+    """Carga datos de un archivo de Excel."""
+    try:
+        return pd.read_excel(ruta_archivo)
+    except Exception as e:
+        print(f"Error al leer el archivo: {e}")
+        raise
+
+def eliminar_columnas_desde(df, columna_inicio):
+    """Elimina todas las columnas desde la columna especificada en adelante."""
+    try:
+        col_index = df.columns.get_loc(columna_inicio)
+        return df.iloc[:, :col_index]
+    except KeyError:
+        print(f"La columna '{columna_inicio}' no se encuentra en el DataFrame.")
+        return df
+
+def formatear_dataframe(df):
+    """Formatea el DataFrame: maneja fechas, valores numéricos y crea nuevas columnas."""
+    df = df.copy()
+    # Eliminar columna 'Comodín 3' si existe
+    df.drop(columns=['Comodín 3'], errors='ignore', inplace=True)
+
+    # Convertir columnas de fecha a datetime
+    for col_fecha in ['Fecha de toma', 'Fecha Completado']:
+        if col_fecha in df.columns:
+            df[col_fecha] = pd.to_datetime(df[col_fecha], errors='coerce')
+
+    # Crear columnas 'Año' y 'Mes' basadas en 'Fecha Completado'
+    if 'Fecha Completado' in df.columns and df['Fecha Completado'].dtype == 'datetime64[ns]':
+        df['Año'] = df['Fecha Completado'].dt.year
+        df['Mes'] = df['Fecha Completado'].dt.month
+    else:
+        print("La columna 'Fecha Completado' no contiene fechas válidas.")
+
+
+    # Manejar valores no numéricos en 'Viscosidad 100 ° C'
+    if 'Viscosidad 100 ° C' in df.columns:
+        # Reemplazar 'WAT' por NaN
+        df['Viscosidad 100 ° C'] = df['Viscosidad 100 ° C'].replace('WAT', np.nan)
+
+        # Convertir a numérico, manejando comas como puntos decimales
+        df['Viscosidad 100 ° C'] = pd.to_numeric(df['Viscosidad 100 ° C'].astype(str).str.replace(',', '.'),
+                                                 errors='coerce')
+
+        # Aplicar transformación condicional
+        df['Viscosidad 100 ° C'] = df['Viscosidad 100 ° C'].apply(
+            lambda x: f"{x / 10:.1f}".replace('.', ',') if pd.notnull(x) and isinstance(x, int) else x
+        )
+
+    # Manejar y formatear valores en la columna 'Hollín'
+    if 'Hollín' in df.columns:
+        df['Hollín'] = pd.to_numeric(df['Hollín'].astype(str).str.replace(',', '.'), errors='coerce')
+        df['Hollín'] = df['Hollín'].map(lambda x: f"{x:.2f}".replace('.', ',') if pd.notnull(x) else '')
+
+    return df
+
+def analizar_correlacion(df):
+    """Analiza y grafica la correlación entre 'Hierro' y 'Silice'."""
+    if {'Hierro', 'Silice'}.issubset(df.columns):
+        correlacion = df['Hierro'].corr(df['Silice'])
+        print(f"Coeficiente de correlación entre Hierro y Silice: {correlacion}")
+        graficar_correlacion(df)
+    else:
+        print("Columnas 'Hierro' y 'Silice' no están presentes en el DataFrame.")
+
+def graficar_correlacion(df):
+    """Grafica la correlación entre 'Hierro' y 'Silice', invirtiendo los ejes."""
+    plt.scatter(df['Silice'], df['Hierro'])
+    plt.axvline(x=20, color='blue', linestyle='-', label='Silice Mínimo (20)')
+    plt.axvline(x=100, color='purple', linestyle='-', label='Silice Máximo (100)')
+    plt.axhline(y=100, color='green', linestyle='--', label='Hierro Mínimo (100)')
+    plt.axhline(y=500, color='red', linestyle='--', label='Hierro Máximo (500)')
+    plt.title('Relación entre Silice y Hierro')
+    plt.xlabel('Silice')
+    plt.ylabel('Hierro')
+    plt.legend()
+    plt.show()
+
+def generar_resumen_laboratorio(df):
+    """Genera un resumen del conteo de la columna 'Número de laboratorio' por 'Nombre de Compañia', 'Año' y 'Mes', ordenado por 'Nombre de Compañía', 'Año', y 'Mes' de mayor a menor."""
+    if 'Nombre de Compañia' in df.columns and 'Número de laboratorio' in df.columns and 'Año' in df.columns and 'Mes' in df.columns:
+        resumen = df.groupby(['Nombre de Compañia', 'Año', 'Mes'])['Número de laboratorio'].count().reset_index(name='Conteo de Números de Laboratorio')
+        return resumen.sort_values(by=['Nombre de Compañia', 'Año', 'Mes'], ascending=[True, False, False])
+    else:
+        raise ValueError("Las columnas 'Nombre de Compañia', 'Número de laboratorio', 'Año' y/o 'Mes' no se encuentran en el DataFrame.")
+
+def filtrar_companias(df):
+    """Filtra el DataFrame para incluir solo las compañías especificadas."""
+    return df[df['Nombre de Compañia'].str.contains('INGENIO|AFILIADOS PALMIRA|SOCIEDAD|TRANSPORTE CENTROVALLE', na=False)]
+
+def ajustar_ancho_columnas(ruta_archivo, nombre_columna_comentarios='Comentarios', ancho_comentarios=70):
+    """Ajusta el ancho de las columnas en una hoja de Excel."""
+    wb = load_workbook(ruta_archivo)
+    sheet = wb.active
+
+    # Encontrar la columna de 'Comentarios'
+    columna_comentarios = None
+    for col in sheet.iter_cols(min_row=1, max_row=1):
+        for cell in col:
+            if cell.value == nombre_columna_comentarios:
+                columna_comentarios = get_column_letter(cell.column)
+                break
+
+    # Ajustar el ancho de todas las columnas
+    for col in sheet.columns:
+        max_length = max((len(str(cell.value)) for cell in col if cell.value), default=0) + 2
+        column_letter = get_column_letter(col[0].column)
+        if column_letter == columna_comentarios:
+            sheet.column_dimensions[column_letter].width = ancho_comentarios
+        else:
+            sheet.column_dimensions[column_letter].width = max_length
+
+    wb.save(ruta_archivo)
+
+# Proceso principal
+archivo_excel = "C:/Users/lider.mejoramiento/Desktop/reporte_muestras.xlsx"
+archivo_excel_modificado = "C:/Users/lider.mejoramiento/Desktop/reporte_muestras_modificado.xlsx"
+
+try:
+    df = cargar_datos_excel(archivo_excel)
+    df = eliminar_columnas_desde(df, 'Digestión de Acido')
+    df = filtrar_companias(df)
+    df = formatear_dataframe(df)
+    analizar_correlacion(df)
+    resumen_laboratorio = generar_resumen_laboratorio(df)
+
+    with pd.ExcelWriter(archivo_excel_modificado, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='Sheet1')
+        resumen_laboratorio.to_excel(writer, index=False, sheet_name='Resumen de Laboratorios')
+
+    ajustar_ancho_columnas(archivo_excel_modificado)
+except Exception as e:
+    print(f"Error durante el procesamiento: {e}")
